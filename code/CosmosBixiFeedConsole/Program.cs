@@ -21,7 +21,10 @@ else
     var container = cosmosClient
         .GetDatabase(config.CosmosDb!.Database!)
         .GetContainer(config.CosmosDb!.Container);
-    var feeder = new CosmosDbFeeder(rootDirectoryClient, container);
+    var feeder = new CosmosDbFeeder(
+        rootDirectoryClient,
+        container,
+        config.CosmosDb!.ParallelWriters);
 
     await feeder.RunAsync();
 }

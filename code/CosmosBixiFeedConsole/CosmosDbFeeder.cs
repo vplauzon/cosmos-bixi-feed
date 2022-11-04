@@ -1,7 +1,9 @@
 ﻿using Azure.Storage.Files.DataLake;
 using CosmosBixiFeedConsole;
 using CsvHelper;
+using CsvHelper.Configuration.Attributes;
 using Microsoft.Azure.Cosmos;
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Globalization;
 
@@ -9,11 +11,16 @@ internal class CosmosDbFeeder
 {
     private readonly DataLakeDirectoryClient _rootDirectoryClient;
     private readonly Container _container;
+    private readonly int _parallelWriters;
 
-    public CosmosDbFeeder(DataLakeDirectoryClient rootDirectoryClient, Container container)
+    public CosmosDbFeeder(
+        DataLakeDirectoryClient rootDirectoryClient,
+        Container container,
+        int parallelWriters)
     {
         _rootDirectoryClient = rootDirectoryClient;
         _container = container;
+        _parallelWriters = parallelWriters;
     }
 
     public async Task RunAsync()
@@ -22,12 +29,57 @@ internal class CosmosDbFeeder
 
         foreach (var yearGroup in blobPathsByYear)
         {
-            var bixiEvents = await LoadBixiEventsAsync(yearGroup);
+            var bixiEvents = new ConcurrentStack<BixiEvent>(
+                (await LoadBixiEventsAsync(yearGroup)).Reverse());
+            var sendTasks = Enumerable.Range(0, _parallelWriters)
+                .Select(i => SendToCosmosDbAsync(bixiEvents))
+                .ToImmutableArray();
 
+            await Task.WhenAll(sendTasks);
         }
     }
 
-    private async Task<ImmutableList<BixiEvent>> LoadBixiEventsAsync(
+    private async Task SendToCosmosDbAsync(ConcurrentStack<BixiEvent> bixiEventsStack)
+    {
+        while (true)
+        {
+            if (bixiEventsStack.TryPop(out var bixiEvent))
+            {
+                var id = Guid.NewGuid().ToString();
+                var document = new
+                {
+                    id = id,
+                    part = id,
+                    StartDate = ToUnixTimeMilliseconds(bixiEvent.StartDate),
+                    StartStationCode = bixiEvent.StartStationCode,
+                    EndDate = ToUnixTimeMilliseconds(bixiEvent.EndDate),
+                    EndStationCode = bixiEvent.EndStationCode,
+                    IsMember = (bixiEvent.IsMember == 1)
+                };
+
+                await _container.CreateItemAsync(document);
+            }
+            else
+            {
+                return;
+            }
+        }
+    }
+
+    private static long ToUnixTimeMilliseconds(DateTime date)
+    {
+        return new DateTimeOffset(
+            date.Year,
+            date.Month,
+            date.Day,
+            date.Hour,
+            date.Minute,
+            date.Second,
+            date.Millisecond,
+            TimeSpan.Zero).ToUnixTimeMilliseconds();
+    }
+
+    private async Task<IImmutableList<BixiEvent>> LoadBixiEventsAsync(
         IImmutableList<string> yearGroup)
     {
         var blobPaths = yearGroup.Take(1);

@@ -9,5 +9,7 @@
         public string? Database { get; set; }
 
         public string? Container { get; set; }
+
+        public int ParallelWriters { get; set; } = 1;
     }
 }
