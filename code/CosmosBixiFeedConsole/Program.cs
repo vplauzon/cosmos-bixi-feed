@@ -1,4 +1,5 @@
 ﻿using CosmosBixiFeedConsole.Config;
+using Microsoft.Azure.Cosmos;
 using System.Net;
 
 //  Allow multiple connections
@@ -11,6 +12,8 @@ if (args.Length < 1)
 else
 {
     var config = await RootConfiguration.LoadConfigAsync(args[0]);
-    //var cosmosClient = new CosmosClient(config.Endpoint!, config.AccessKey!);
-    //var container = cosmosClient.GetDatabase(config.Database!).GetContainer(config.Container);
+    var cosmosClient = new CosmosClient(config.CosmosDb!.Endpoint!, config.CosmosDb!.AccessKey!);
+    var container = cosmosClient
+        .GetDatabase(config.CosmosDb!.Database!)
+        .GetContainer(config.CosmosDb!.Container);
 }
