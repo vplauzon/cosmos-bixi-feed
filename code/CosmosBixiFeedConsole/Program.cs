@@ -1,4 +1,6 @@
-﻿using CosmosBixiFeedConsole.Config;
+﻿using Azure.Identity;
+using Azure.Storage.Files.DataLake;
+using CosmosBixiFeedConsole.Config;
 using Microsoft.Azure.Cosmos;
 using System.Net;
 
@@ -12,8 +14,14 @@ if (args.Length < 1)
 else
 {
     var config = await RootConfiguration.LoadConfigAsync(args[0]);
+    var rootDirectoryClient = new DataLakeDirectoryClient(
+        new Uri(config.Storage!.FolderUrl!),
+        new DefaultAzureCredential());
     var cosmosClient = new CosmosClient(config.CosmosDb!.Endpoint!, config.CosmosDb!.AccessKey!);
     var container = cosmosClient
         .GetDatabase(config.CosmosDb!.Database!)
         .GetContainer(config.CosmosDb!.Container);
+    var feeder = new CosmosDbFeeder(rootDirectoryClient, container);
+
+    await feeder.RunAsync();
 }
