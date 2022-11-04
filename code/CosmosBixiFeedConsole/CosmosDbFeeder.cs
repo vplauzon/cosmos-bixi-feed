@@ -52,6 +52,8 @@ internal class CosmosDbFeeder
 
     private async Task SendToCosmosDbAsync(ConcurrentStack<BixiEvent> bixiEventsStack)
     {
+        var rand = new Random();
+
         while (true)
         {
             var batch = PopBatch(bixiEventsStack);
@@ -63,16 +65,33 @@ internal class CosmosDbFeeder
 
                 foreach (var e in batch)
                 {
-                    txBatch.CreateItem(new
+                    var item = new
                     {
                         id = Guid.NewGuid().ToString(),
                         part = batchId,
-                        StartDate = ToUnixTimeMilliseconds(e.StartDate),
-                        StartStationCode = e.StartStationCode,
-                        EndDate = ToUnixTimeMilliseconds(e.EndDate),
-                        EndStationCode = e.EndStationCode,
+                        Start = new
+                        {
+                            StartDate = ToUnixTimeMilliseconds(e.StartDate),
+                            StartStationCode = e.StartStationCode
+                        },
+                        End = new
+                        {
+                            EndDate = ToUnixTimeMilliseconds(e.EndDate),
+                            EndStationCode = e.EndStationCode
+                        },
+                        Trace = Enumerable.Range(0, rand.Next(10))
+                        .Select(i => new
+                        {
+                            Name = new string(
+                                Enumerable.Range(0, 15)
+                                .Select(i => (char)(rand.Next(26) + 'A')).ToArray()),
+                            Status = rand.Next(5)
+                        })
+                        .ToImmutableArray(),
                         IsMember = (e.IsMember == 1)
-                    });
+                    };
+
+                    txBatch.CreateItem(item);
                 }
 
                 await txBatch.ExecuteAsync();
