@@ -29,8 +29,13 @@ internal class CosmosDbFeeder
 
         foreach (var yearGroup in blobPathsByYear)
         {
+            Console.WriteLine("Load blobs");
+
             var bixiEvents = new ConcurrentStack<BixiEvent>(
                 (await LoadBixiEventsAsync(yearGroup)).Reverse());
+
+            Console.WriteLine($"{bixiEvents.Count()} events to send to Cosmos DB...");
+
             var sendTasks = Enumerable.Range(0, _parallelWriters)
                 .Select(i => SendToCosmosDbAsync(bixiEvents))
                 .ToImmutableArray();
