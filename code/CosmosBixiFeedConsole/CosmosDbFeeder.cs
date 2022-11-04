@@ -12,15 +12,18 @@ internal class CosmosDbFeeder
     private readonly DataLakeDirectoryClient _rootDirectoryClient;
     private readonly Container _container;
     private readonly int _parallelWriters;
+    private readonly int _batchSize;
 
     public CosmosDbFeeder(
         DataLakeDirectoryClient rootDirectoryClient,
         Container container,
-        int parallelWriters)
+        int parallelWriters,
+        int batchSize)
     {
         _rootDirectoryClient = rootDirectoryClient;
         _container = container;
         _parallelWriters = parallelWriters;
+        _batchSize = batchSize;
     }
 
     public async Task RunAsync()
@@ -48,27 +51,46 @@ internal class CosmosDbFeeder
     {
         while (true)
         {
-            if (bixiEventsStack.TryPop(out var bixiEvent))
-            {
-                var id = Guid.NewGuid().ToString();
-                var document = new
-                {
-                    id = id,
-                    part = id,
-                    StartDate = ToUnixTimeMilliseconds(bixiEvent.StartDate),
-                    StartStationCode = bixiEvent.StartStationCode,
-                    EndDate = ToUnixTimeMilliseconds(bixiEvent.EndDate),
-                    EndStationCode = bixiEvent.EndStationCode,
-                    IsMember = (bixiEvent.IsMember == 1)
-                };
+            var batch = PopBatch(bixiEventsStack);
 
-                await _container.CreateItemAsync(document);
+            if (batch.Any())
+            {
+                var batchId = $"batch-{Guid.NewGuid()}";
+                var txBatch = _container.CreateTransactionalBatch(new PartitionKey(batchId));
+
+                foreach(var e in batch)
+                {
+                    txBatch.CreateItem(new
+                    {
+                        id = Guid.NewGuid().ToString(),
+                        part = batchId,
+                        StartDate = ToUnixTimeMilliseconds(e.StartDate),
+                        StartStationCode = e.StartStationCode,
+                        EndDate = ToUnixTimeMilliseconds(e.EndDate),
+                        EndStationCode = e.EndStationCode,
+                        IsMember = (e.IsMember == 1)
+                    });
+                }
+
+                await txBatch.ExecuteAsync();
             }
             else
             {
                 return;
             }
         }
+    }
+
+    private IImmutableList<BixiEvent> PopBatch(ConcurrentStack<BixiEvent> bixiEventsStack)
+    {
+        var builder = ImmutableArray<BixiEvent>.Empty.ToBuilder();
+
+        while (builder.Count() < _batchSize && bixiEventsStack.TryPop(out var bixiEvent))
+        {
+            builder.Add(bixiEvent);
+        }
+
+        return builder.ToImmutableArray();
     }
 
     private static long ToUnixTimeMilliseconds(DateTime date)

@@ -24,7 +24,8 @@ else
     var feeder = new CosmosDbFeeder(
         rootDirectoryClient,
         container,
-        config.CosmosDb!.ParallelWriters);
+        config.CosmosDb!.ParallelWriters,
+        config.CosmosDb!.BatchSize);
 
     await feeder.RunAsync();
 }

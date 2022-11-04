@@ -11,5 +11,7 @@
         public string? Container { get; set; }
 
         public int ParallelWriters { get; set; } = 1;
+        
+        public int BatchSize { get; set; } = 1;
     }
 }
