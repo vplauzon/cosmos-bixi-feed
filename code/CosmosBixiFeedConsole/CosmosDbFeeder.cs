@@ -11,17 +11,20 @@ internal class CosmosDbFeeder
 {
     private readonly DataLakeDirectoryClient _rootDirectoryClient;
     private readonly Container _container;
+    private readonly int _blobLimit;
     private readonly int _parallelWriters;
     private readonly int _batchSize;
 
     public CosmosDbFeeder(
         DataLakeDirectoryClient rootDirectoryClient,
         Container container,
+        int blobLimit,
         int parallelWriters,
         int batchSize)
     {
         _rootDirectoryClient = rootDirectoryClient;
         _container = container;
+        _blobLimit = blobLimit;
         _parallelWriters = parallelWriters;
         _batchSize = batchSize;
     }
@@ -58,7 +61,7 @@ internal class CosmosDbFeeder
                 var batchId = $"batch-{Guid.NewGuid()}";
                 var txBatch = _container.CreateTransactionalBatch(new PartitionKey(batchId));
 
-                foreach(var e in batch)
+                foreach (var e in batch)
                 {
                     txBatch.CreateItem(new
                     {
@@ -109,7 +112,7 @@ internal class CosmosDbFeeder
     private async Task<IImmutableList<BixiEvent>> LoadBixiEventsAsync(
         IImmutableList<string> yearGroup)
     {
-        var blobPaths = yearGroup.Take(1);
+        var blobPaths = _blobLimit == 0 ? yearGroup : yearGroup.Take(_blobLimit);
         var parseTasks = blobPaths
             .Select(p => ParseCsvAsync(_rootDirectoryClient.GetFileClient(p)))
             .ToImmutableArray();
