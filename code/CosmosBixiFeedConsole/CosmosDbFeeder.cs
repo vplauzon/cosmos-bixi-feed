@@ -88,7 +88,8 @@ internal class CosmosDbFeeder
                             Status = rand.Next(5)
                         })
                         .ToImmutableArray(),
-                        IsMember = (e.IsMember == 1)
+                        IsMember = (e.IsMember == 1),
+                        IsDeleted = false,
                     };
 
                     txBatch.CreateItem(item);
