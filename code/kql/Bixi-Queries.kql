@@ -1,0 +1,175 @@
+//  Clear all data
+.clear table BixiLanding data 
+
+.clear table BixiFlatten data
+
+.clear materialized-view BixiLatest data
+
+
+//  Cardinality
+BixiLanding
+| count
+
+
+//  Backfill gap
+BixiLanding
+| summarize LastTimestamp=max(_timestamp)
+| project Gap=now()-LastTimestamp
+
+//  Sampling
+BixiLanding
+| order by EndDate desc
+| take 10
+
+//  Average latency
+BixiLanding
+| order by ingestion_time() desc
+| take 10000
+| extend Delta = ingestion_time()-_timestamp
+| summarize avg(Delta)
+
+//  Average time wrap ratio
+BixiLanding
+| order by ingestion_time() desc
+| extend BinEndDate = bin(EndDate, 30s)
+| extend BinTimestamp = bin(_timestamp, 30s)
+| distinct BinEndDate, BinTimestamp
+| summarize MinBinEndDate=min(BinEndDate), MaxBinEndDate=max(BinEndDate) by BinTimestamp
+| order by BinTimestamp desc
+| extend DeltaTimeStamp = prev(BinTimestamp)-BinTimestamp
+| extend DeltaEndDate = prev(MaxBinEndDate)-MinBinEndDate
+| where isnotnull(DeltaTimeStamp)
+| extend Ratio = DeltaEndDate / DeltaTimeStamp
+| take 100
+| summarize TimeWrapRatio=avg(Ratio)
+
+//  Ingestion time chart
+BixiLanding
+| summarize count() by bin(ingestion_time(), 1m)
+| render timechart
+
+//  Reference data table
+BixiStations
+| count
+
+//  Reference data table
+BixiStations
+| take 10
+
+//  Look at the stations on a map
+BixiStations
+| project longitude, latitude
+| render scatterchart with (kind=map)
+
+//  Activity over time
+BixiLanding
+| summarize count() by bin(StartDate, 1d)
+| render timechart
+
+//  Are all stations equal?
+BixiLanding
+| summarize Cardinality=count() by StartStationCode
+| top 10 by Cardinality
+| render columnchart
+
+//  What are the top 10 stations?
+BixiStations
+| join BixiLanding on $left.code==$right.StartStationCode
+| summarize Cardinality=count() by name
+| top 10 by Cardinality
+| render columnchart
+
+//  Where are the top 10 stations?
+let Top10Codes = BixiLanding
+    | summarize Cardinality=count() by StartStationCode
+    | top 10 by Cardinality
+    | project StartStationCode;
+BixiStations
+| where code in (Top10Codes)
+| project longitude, latitude
+| render scatterchart with (kind=map)
+
+//  Are "members" renting more?
+BixiLanding
+| summarize count() by IsMember
+//  Yes by an order of magnitude
+
+//  So we expect to see the duration of trips to be higher for member as well, right?
+BixiLanding
+| summarize avg(EndDate-StartDate) by IsMember
+//  No, in fact, members clock in nearly half the duration
+
+//  What about the distance?  (here we use straight-line distance as an approximation)
+let StartGeoAndEndStationCode = BixiStations
+    | join BixiLanding on $left.code==$right.StartStationCode
+    | project StartLatitude=latitude, StartLongitude=longitude, StartStationCode, EndStationCode, IsMember;
+BixiStations
+| join StartGeoAndEndStationCode on $left.code==$right.EndStationCode
+| project StartLatitude, StartLongitude, EndLatitude=latitude, EndLongitude=longitude, IsMember
+| extend Distance=geo_distance_2points(StartLongitude, StartLatitude, EndLongitude, EndLatitude)
+| summarize round(avg(Distance)) by IsMember
+//  Surprisingly close!
+
+//  Let's look at that trace column
+BixiLanding
+| take 10
+
+//  We can query inside the json
+BixiLanding
+| where Trace has "WUUCSSHSRCOEDXR"
+
+BixiLanding
+| extend TraceCount = array_length(Trace)
+| summarize avg(TraceCount) by IsMember
+
+BixiLanding
+| take 10
+
+//  It could be useful to flatten that array
+BixiLanding
+| mv-expand Trace
+| take 100
+//  Now one element per row
+
+//  And extract the columns out
+BixiLanding
+| mv-expand Trace
+| extend TraceName = tostring(Trace.Name)
+| extend TraceStatus = toint(Trace.Status)
+//  Let's remove the Trace column
+| project-away Trace
+//  Let's put those columns at the beginning
+| project-reorder TraceName, TraceStatus
+| take 10
+
+//  This is what is done with Update Policy here:
+BixiFlatten
+| take 100
+
+.set TempTable <|
+BixiFlatten
+| take 100
+
+TempTable
+| take 10
+
+
+BixiFlatten
+| count
+
+//  Now let's update a record and see how it appears in table
+BixiLanding
+| where Id == "ea4ff40c-c81f-45ab-9709-9e74f4800f15"
+
+//  Samesy with flatten ("derived") table
+BixiLanding
+| where Id == "72dd480e-f3bf-44cc-9957-f13aad1de83f"
+
+//  We could keep the latest version of the document only
+BixiLanding
+| summarize arg_max(_timestamp, *) by Id
+| where Id == "72dd480e-f3bf-44cc-9957-f13aad1de83f"
+
+//  We can also use a materialized view which pre-compute the latest version of each document
+BixiLatest
+| where Id == "c5dac473-6f5a-4791-b268-942990b16d36"

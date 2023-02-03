@@ -1,0 +1,113 @@
+//  Create landing table
+.create-merge table BixiLanding (StartDate: datetime, StartStationCode: long, EndDate: datetime, EndStationCode: long, IsMember: bool, Trace:dynamic, IsDeleted: bool, Id: string, part: string, _ts: long, _timestamp: datetime) 
+
+//  Make the landing table streaming (low latency ingestion)
+.alter table BixiLanding policy streamingingestion enable 
+
+//  "Backup" batching ingestion when too much data flow through streaming
+.alter table BixiLanding policy ingestionbatching
+```
+{
+    "MaximumBatchingTimeSpan" : "00:00:20",
+    "MaximumNumberOfItems" : 1000,
+    "MaximumRawDataSizeMB": 200000
+}
+```
+
+//  Mapping Cosmos DB documents to Kusto table columns
+.create table BixiLanding ingestion json mapping "DocumentMapping"
+```
+[
+    {"column":"StartDate","path":"$.Start.StartDate","transform":"DateTimeFromUnixMilliseconds"},
+    {"column":"StartStationCode","path":"$.Start.StartStationCode"},
+    {"column":"EndDate","path":"$.End.EndDate","transform":"DateTimeFromUnixMilliseconds"},
+    {"column":"EndStationCode","path":"$.End.EndStationCode"},
+    {"column":"IsMember","path":"$.IsMember"},
+    {"column":"Trace","path":"$.Trace"},
+    {"column":"IsDeleted","path":"$.IsDeleted"},
+    {"column":"Id","path":"$.id"},
+    {"column":"part","path":"$.part"},
+    {"column":"_ts","path":"$._ts"},
+    {"column":"_timestamp","path":"$._ts","transform":"DateTimeFromUnixSeconds"}
+]
+```
+
+//  Let's create a function flattening the entire table
+.create-or-alter function FlattenBixiLanding(){
+    BixiLanding
+    | mv-expand Trace
+    | extend TraceName = tostring(Trace.Name)
+    | extend TraceStatus = toint(Trace.Status)
+    //  Let's remove the Trace column
+    | project-away Trace
+    //  Let's put those columns at the beginning
+    | project-reorder TraceName, TraceStatus
+}
+
+//  Let's create a function that can receive that data
+.set BixiFlatten <|
+    FlattenBixiLanding
+    | take 0
+
+//  Let's define an update policy running that function at ingestion time
+.alter-merge table BixiFlatten policy update
+```
+[
+    {
+        "IsEnabled": true,
+        "Source": "BixiLanding",
+        "Query": "FlattenBixiLanding",
+        "IsTransactional": true,
+        "PropagateIngestionProperties": true
+    }
+]
+```
+
+//  Let's create a materialized view for latest records
+.create async materialized-view with (backfill=true) BixiLatest on table BixiLanding
+{
+    BixiLanding
+    | summarize arg_max(_ts, *) by Id
+}
+
+.set BixiStations  <|
+    externaldata(code:long, name:string, latitude:real, longitude:real)
+    [
+        h@"https://vpldata.blob.core.windows.net/datasets/bixi/stations/2014/Stations_2014.csv;impersonate",
+        h@"https://vpldata.blob.core.windows.net/datasets/bixi/stations/2015/Stations_2015.csv;impersonate",
+        h@"https://vpldata.blob.core.windows.net/datasets/bixi/stations/2016/Stations_2016.csv;impersonate",
+        h@"https://vpldata.blob.core.windows.net/datasets/bixi/stations/2017/Stations_2017.csv;impersonate",
+        h@"https://vpldata.blob.core.windows.net/datasets/bixi/stations/2018/Stations_2018.csv;impersonate",
+        h@"https://vpldata.blob.core.windows.net/datasets/bixi/stations/2019/Stations_2019.csv;impersonate",
+        h@"https://vpldata.blob.core.windows.net/datasets/bixi/stations/2020/stations.csv;impersonate",
+        h@"https://vpldata.blob.core.windows.net/datasets/bixi/stations/2021/2021_stations.csv;impersonate",
+        h@"https://vpldata.blob.core.windows.net/datasets/bixi/stations/2021/2021_stations.csv;impersonate",
+        h@"https://vpldata.blob.core.windows.net/datasets/bixi/stations/2022/20220104_stations.csv;impersonate",
+        h@"https://vpldata.blob.core.windows.net/datasets/bixi/stations/2022/20220105_stations.csv;impersonate",
+        h@"https://vpldata.blob.core.windows.net/datasets/bixi/stations/2022/20220106_stations.csv;impersonate",
+        h@"https://vpldata.blob.core.windows.net/datasets/bixi/stations/2022/20220107_stations.csv;impersonate",
+        h@"https://vpldata.blob.core.windows.net/datasets/bixi/stations/2022/20220108_stations.csv;impersonate"
+    ]
+    with(format="csv", ignoreFirstRecord=true)
+    | summarize take_any(*) by code, name
+
+//  Clean stations
+.delete table BixiStations records <|
+    BixiStations
+    | where latitude==-1
+    | take 10
+
+//  If passed by free cluster
+.alter cluster policy callout
+```
+[
+    {
+        "CalloutType": "kusto",
+        "CalloutUriRegex": "kvcf81c4662da5e488f87f",
+        "CanCall": true
+    }
+]
+```
+
+.set BixiStations  <|
+    cluster("kvcf81c4662da5e488f87f.southcentralus.kusto.windows.net").database("Test").BixiStations
